@@ -11,7 +11,7 @@ gradio
 shutils
 pillow
 #pytesseract
-tesseract-ocr
+#tesseract-ocr
 timestamps
 msal
 sentence-transformers

@@ -14,6 +14,10 @@ import easyocr
 
 embeddings = SentenceTransformerEmbeddings(model_name="paraphrase-MiniLM-L6-v2")
 llm = Ollama(model="mistral")
+persist_directory = "./chroma_db"
+if os.path.exists(persist_directory):
+    shutil.rmtree(persist_directory)
+os.makedirs(persist_directory, exist_ok=True)
 
 def process_pdf(file_path):
     if file_path is None or not os.path.exists(file_path):
@@ -22,9 +26,9 @@ def process_pdf(file_path):
     data = loader.load()
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = text_splitter.split_documents(data)
-    persist_directory = "./chroma_db"
-    if os.path.exists(persist_directory):
-        shutil.rmtree(persist_directory)
+#    persist_directory = "./chroma_db"
+#    if os.path.exists(persist_directory):
+#        shutil.rmtree(persist_directory)
     vectorstore = Chroma.from_documents(
         documents=chunks, embedding=embeddings, persist_directory=persist_directory
     )
@@ -117,7 +121,12 @@ def multimodal_chatbot(message, history, files=None):
     response = ""
     #file = files[0] if files else None  # Only process the first file for simplicity
     file = files
-    print(files)
+    #print(files)
+
+    #if len(files)> 1:
+    #    file = files[0]
+    #else:
+    #    file = files
 
     if file is not None:
         ext = os.path.splitext(file)[1].lower()
@@ -137,14 +146,20 @@ def multimodal_chatbot(message, history, files=None):
         elif ext in [".png", ".jpg", ".jpeg"]:
             response = process_image(file.name)
         elif ext == ".msg":
-            temp_dir = "./temp_emails"
-            os.makedirs(temp_dir, exist_ok=True)
-            file_path = os.path.join(temp_dir, file.name)
-            with open(file_path, "wb") as f:
-                f.write(file.read())
-            response = read_msg_emails_and_summarize(temp_dir)
+            # Check if all files are .msg
+            msg_files = [f for f in files if os.path.splitext(f.name)[1].lower() == ".msg"]
+            if msg_files:
+                temp_dir = r"C:\Users\lenovo\Documents\vs-code\github\AI-Agents-Chatbot\AI-Agents-Chatbot\data"
+                os.makedirs(temp_dir, exist_ok=True)
+                # Save all .msg files to temp_dir
+                #for file in msg_files:
+                #    file_path = os.path.join(temp_dir, file.name)
+                #    with open(file_path, "wb") as f_out:
+                #        f_out.write(file.read())
+                # Summarize all emails in temp_dir
+                response = read_msg_emails_and_summarize(temp_dir)
         else:
-            response = "Unsupported file type. Please upload PDF, Excel, image, or .msg files."
+            response = "Unsupported file type. Please upload PDF, Excel, image."
     else:
         response = ollama_llm(message, "")
 
@@ -154,7 +169,8 @@ chatbot_ui = gr.ChatInterface(
     multimodal_chatbot,
     chatbot=gr.Chatbot(
         label="Multimodal Chatbot",
-        avatar_images=("C:\Users\lenovo\Documents\vs-code\github\AI-Agents-Chatbot\AI-Agents-Chatbot\images\human.jpg", "C:\Users\lenovo\Documents\vs-code\github\AI-Agents-Chatbot\AI-Agents-Chatbot\images\robot.png")
+        avatar_images=(r"C:\Users\lenovo\Documents\vs-code\github\AI-Agents-Chatbot\AI-Agents-Chatbot\images\human.jpg",
+                        r"C:\Users\lenovo\Documents\vs-code\github\AI-Agents-Chatbot\AI-Agents-Chatbot\images\robot.png")
     ),
     textbox=gr.Textbox(
         placeholder="Type your question or upload a file...",
@@ -163,15 +179,16 @@ chatbot_ui = gr.ChatInterface(
     additional_inputs=[
         gr.File(
             file_types=[".pdf", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".msg"],
-            label="Upload PDF, Excel, Image, or .msg Email",
+            label="Upload PDF, Excel, Image",
             show_label=True,
             interactive=True,
             visible=True,
+            #file_count="multiple",
 #            multiple=True,
         )
     ],
-    title="Multi-Modal Chatbot with Email Summarization",
-    description="Ask questions or upload files (PDF, Excel, Images, Outlook .msg) for analysis and summarization.",
+    title="Multi-Modal Chatbot",
+    description="Ask questions or upload files (PDF, Excel, Images) for analysis and summarization.",
     theme="soft",
 )
 
