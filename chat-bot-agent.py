@@ -1,37 +1,50 @@
 import gradio as gr
+import extract_msg
+from dateutil import parser
 from langchain_community.document_loaders import PyMuPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import Chroma
-from langchain.embeddings import SentenceTransformerEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+#from langchain.text_splitter import RecursiveCharacterTextSplitter
+#from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma
+#from langchain.embeddings import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.llms import Ollama
 import requests
 import re
 import os
 import shutil
 import pandas as pd
 from PIL import Image
-#import pytesseract
+import pytesseract
 import json
 import datetime
+import easyocr
+import extract_msg
+from dateutil import parser
+
 
 # MSAL for Outlook authentication
-from msal import PublicClientApplication
+#from msal import PublicClientApplication
 
 # ----------- Configuration ------------
 
 embeddings = SentenceTransformerEmbeddings(model_name="paraphrase-MiniLM-L6-v2")
 
+
 #Insert a call to Mistral LLM
+llm = Ollama(model="mistral")
+#print(llm("The first man on the summit of Mount Everest, the highest peak on Earth, was ..."))
 
 # Outlook MSAL config - fill these with your Azure AD app info
-CLIENT_ID = "your-client-id"
-TENANT_ID = "your-tenant-id"
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-SCOPES = ["Mail.Read"]
+#CLIENT_ID = "your-client-id"
+#TENANT_ID = "your-tenant-id"
+#AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
+#SCOPES = ["Mail.Read"]
 
 # ----------- Outlook Authentication -----------
 
-app = PublicClientApplication(client_id=CLIENT_ID, authority=AUTHORITY)
-
+#app = PublicClientApplication(client_id=CLIENT_ID, authority=AUTHORITY)
+'''
 def get_access_token():
     accounts = app.get_accounts()
     if accounts:
@@ -44,6 +57,7 @@ def get_access_token():
         return result["access_token"]
     else:
         raise Exception("Could not acquire access token")
+'''
 
 # ----------- PDF Processing -----------
 
@@ -78,7 +92,9 @@ def ollama_llm(question, context):
     prompt = "You are an AI Agent which can summarise the output in a point wise manner.\n" + formatted_prompt
 
     # Call LLM Agents 
-
+    response_content = llm(formatted_prompt)
+    if not response_content:
+        return "No response from LLM."
     final_answer = re.sub(r"<think>.*?</think>", "", response_content, flags=re.DOTALL).strip()
     return final_answer
 
@@ -108,49 +124,68 @@ def process_excel(file_path):
         return f"Error processing Excel: {str(e)}"
 
 # ----------- Image (Chart) Processing -----------
-'''
 def process_image(file_path):
     if file_path is None or not os.path.exists(file_path):
         return "No image file found."
 
     try:
-        image = Image.open(file_path)
-        text = pytesseract.image_to_string(image)
+        reader = easyocr.Reader(['en'])  # You can add other language codes as needed
+        result = reader.readtext(file_path, detail=0)  # detail=0 returns only text
+        text = "\n".join(result)
         if not text.strip():
             return "No text detected in the image."
         return ollama_llm("Summarize this extracted text from image", text)
     except Exception as e:
         return f"Error processing image: {str(e)}"
-'''
+
 # ----------- Outlook Email Summarization -----------
+def read_msg_emails_and_summarize(directory):
+    """
+    Reads all .msg files in the given directory, sorts them by date, and summarizes the conversation.
+    """
+    emails = []
+    for filename in os.listdir(directory):
+        if filename.lower().endswith('.msg'):
+            filepath = os.path.join(directory, filename)
+            try:
+                msg = extract_msg.Message(filepath)
+                msg_sender = msg.sender
+                msg_to = msg.to
+                msg_subject = msg.subject
+                msg_date = parser.parse(msg.date)
+                msg_body = msg.body
+                emails.append({
+                    'filename': filename,
+                    'from': msg_sender,
+                    'to': msg_to,
+                    'subject': msg_subject,
+                    'date': msg_date,
+                    'body': msg_body
+                })
+            except Exception as e:
+                print(f"Could not process {filename}: {e}")
 
-def get_emails_by_subject(subject):
-    try:
-        access_token = get_access_token()
-    except Exception as e:
-        return f"Authentication error: {str(e)}"
+    # Sort emails by date
+    emails.sort(key=lambda x: x['date'])
 
-    headers = {"Authorization": f"Bearer {access_token}"}
-    params = {
-        "$search": f'"subject:{subject}"',
-        "$top": 50
-    }
-    response = requests.get("https://graph.microsoft.com/v1.0/me/messages", headers=headers, params=params)
-    if response.status_code != 200:
-        return f"Error fetching emails: {response.status_code} - {response.text}"
+    # Combine email bodies for summarization
+    combined_text = ""
+    for email in emails:
+        combined_text += (
+            f"From: {email['from']}\n"
+            f"To: {email['to']}\n"
+            f"Subject: {email['subject']}\n"
+            f"Date: {email['date'].strftime('%d %b %Y, %I:%M %p')}\n"
+            f"Body: {email['body']}\n"
+            "-----\n"
+        )
 
-    emails = response.json().get("value", [])
-    if not emails:
-        return "No emails found with that subject."
-
-    combined_text = "\n\n---\n\n".join(email.get("body", {}).get("content", "") for email in emails)
-    # Optionally strip HTML tags here if needed
-
-    summary = ollama_llm(f"Summarize emails with subject: {subject}", combined_text)
+    # Use your LLM summarizer
+    summary = ollama_llm("Summarize this email conversation in a point-wise manner.", combined_text)
     return summary
 
-# ----------- Main Chatbot Handler -----------
 
+# ----------- Main Chatbot Handler -----------
 def chatbot(user_message, chat_history, file):
     """
     user_message: str - user text input or command
@@ -180,25 +215,23 @@ def chatbot(user_message, chat_history, file):
                     response = ollama_llm("Summarize this document", combined_text)
         elif ext in [".xls", ".xlsx"]:
             response = process_excel(file.name)
-        #elif ext in [".png", ".jpg", ".jpeg"]:
-        #    response = process_image(file.name)
+        elif ext in [".png", ".jpg", ".jpeg"]:
+            response = process_image(file.name)
+        elif ext == ".msg":
+            # Save uploaded file to a temp directory
+            temp_dir = "./temp_emails"
+            os.makedirs(temp_dir, exist_ok=True)
+            file_path = os.path.join(temp_dir, file.name)
+            with open(file_path, "wb") as f:
+                f.write(file.read())
+            response = read_msg_emails_and_summarize(temp_dir)
+            # Optionally, clean up temp_dir after processing
+            # Update chat history with user and bot messages
+            chat_history.append((user_message, response))
+            return chat_history, None  # Clear file upload after processing
         else:
             response = "Unsupported file type. Please upload PDF, Excel, or image files."
-    else:
-        # No file uploaded, check if user wants email summarization
-        if user_message.lower().startswith("summarise my email with subject"):
-            # Extract subject from command
-            subject = user_message[len("summarise my email with subject"):].strip()
-            if not subject:
-                response = "Please provide a subject after the command."
-            else:
-                response = get_emails_by_subject(subject)
-        else:
-            response = "Please upload a file or enter a command like 'Summarise my email with Subject XYZ'."
 
-    # Update chat history with user and bot messages
-    chat_history.append((user_message, response))
-    return chat_history, None  # Clear file upload after processing
 
 # ----------- Gradio UI -----------
 
